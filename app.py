@@ -247,48 +247,52 @@ def process_file(file, threshold_high, threshold_low):
         # EndNote often exports abstracts in columns like "Abstract Note" or just has author information in a column
         abstract_variants = ['abstract', 'summary', 'abstract note', 'notes', 'research notes']
         
-        # Special handling for EndNote exports which might not have dedicated abstract column
-        # Look for long text fields that might contain abstracts
-        long_text_fields = []
-        for col in df.columns:
-            if col not in ['Title'] and isinstance(df[col].iloc[0] if len(df) > 0 else "", str):
-                # Sample the first few non-empty values
-                sample_vals = [str(val) for val in df[col].dropna().head(5).values if isinstance(val, str)]
-                if sample_vals and any(len(val) > 100 for val in sample_vals):  # Likely abstract if text is long
-                    long_text_fields.append(col)
-                    
-        if long_text_fields and not abstract_col:
-            # If we have long text fields but no abstract column, use the longest one as abstract
-            if len(long_text_fields) == 1:
-                abstract_col = long_text_fields[0]
-                st.info(f"Using '{abstract_col}' as Abstract field based on text length")
-            else:
-                # Find the field with the longest average text
-                avg_lengths = []
-                for field in long_text_fields:
-                    avg_len = df[field].astype(str).apply(len).mean()
-                    avg_lengths.append((field, avg_len))
-                
-                # Sort by average length and take the longest
-                avg_lengths.sort(key=lambda x: x[1], reverse=True)
-                abstract_col = avg_lengths[0][0]
-                st.info(f"Using '{abstract_col}' as Abstract field (average length: {int(avg_lengths[0][1])} chars)")
+        # Initialize these variables
+        title_col = None
+        abstract_col = None
         
         # Look for title column
-        title_col = None
         for variant in title_variants:
             matches = [col for col in df.columns if variant.lower() in col.lower()]
             if matches:
                 title_col = matches[0]
+                st.success(f"✅ Found title column: '{title_col}'")
                 break
                 
         # Look for abstract column
-        abstract_col = None
         for variant in abstract_variants:
             matches = [col for col in df.columns if variant.lower() in col.lower()]
             if matches:
                 abstract_col = matches[0]
+                st.success(f"✅ Found abstract column: '{abstract_col}'")
                 break
+        
+        # Special handling for EndNote exports which might not have dedicated abstract column
+        if not abstract_col:
+            long_text_fields = []
+            for col in df.columns:
+                if col not in ['Title'] and isinstance(df[col].iloc[0] if len(df) > 0 else "", str):
+                    # Sample the first few non-empty values
+                    sample_vals = [str(val) for val in df[col].dropna().head(5).values if isinstance(val, str)]
+                    if sample_vals and any(len(val) > 100 for val in sample_vals):  # Likely abstract if text is long
+                        long_text_fields.append(col)
+                    
+            if long_text_fields:
+                # If we have long text fields but no abstract column, use the longest one as abstract
+                if len(long_text_fields) == 1:
+                    abstract_col = long_text_fields[0]
+                    st.success(f"✅ Using '{abstract_col}' as Abstract field based on text length")
+                else:
+                    # Find the field with the longest average text
+                    avg_lengths = []
+                    for field in long_text_fields:
+                        avg_len = df[field].astype(str).apply(len).mean()
+                        avg_lengths.append((field, avg_len))
+                    
+                    # Sort by average length and take the longest
+                    avg_lengths.sort(key=lambda x: x[1], reverse=True)
+                    abstract_col = avg_lengths[0][0]
+                    st.success(f"✅ Using '{abstract_col}' as Abstract field (average length: {int(avg_lengths[0][1])} chars)")
         
         # If we found variant column names, rename them to standard format
         if title_col and title_col != 'Title':
@@ -512,35 +516,11 @@ def check_csv_format():
         # EndNote often exports abstracts in columns like "Abstract Note" or just has author information in a column
         abstract_variants = ['abstract', 'summary', 'abstract note', 'notes', 'research notes']
         
-        # Special handling for EndNote exports which might not have dedicated abstract column
-        # Look for long text fields that might contain abstracts
-        long_text_fields = []
-        for col in df.columns:
-            if col not in ['Title'] and isinstance(df[col].iloc[0] if len(df) > 0 else "", str):
-                # Sample the first few non-empty values
-                sample_vals = [str(val) for val in df[col].dropna().head(5).values if isinstance(val, str)]
-                if sample_vals and any(len(val) > 100 for val in sample_vals):  # Likely abstract if text is long
-                    long_text_fields.append(col)
-                    
-        if long_text_fields and not abstract_col:
-            # If we have long text fields but no abstract column, use the longest one as abstract
-            if len(long_text_fields) == 1:
-                abstract_col = long_text_fields[0]
-                st.info(f"Using '{abstract_col}' as Abstract field based on text length")
-            else:
-                # Find the field with the longest average text
-                avg_lengths = []
-                for field in long_text_fields:
-                    avg_len = df[field].astype(str).apply(len).mean()
-                    avg_lengths.append((field, avg_len))
-                
-                # Sort by average length and take the longest
-                avg_lengths.sort(key=lambda x: x[1], reverse=True)
-                abstract_col = avg_lengths[0][0]
-                st.info(f"Using '{abstract_col}' as Abstract field (average length: {int(avg_lengths[0][1])} chars)")
+        # Initialize these variables
+        title_col = None
+        abstract_col = None
         
         # Look for title column
-        title_col = None
         for variant in title_variants:
             matches = [col for col in df.columns if variant.lower() in col.lower()]
             if matches:
@@ -549,7 +529,6 @@ def check_csv_format():
                 break
                 
         # Look for abstract column
-        abstract_col = None
         for variant in abstract_variants:
             matches = [col for col in df.columns if variant.lower() in col.lower()]
             if matches:
@@ -558,7 +537,6 @@ def check_csv_format():
                 break
         
         # Special handling for EndNote exports which might not have dedicated abstract column
-        # Look for long text fields that might contain abstracts
         if not abstract_col:
             long_text_fields = []
             for col in df.columns:

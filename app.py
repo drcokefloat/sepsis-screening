@@ -189,37 +189,95 @@ def classify_record(score, threshold_high, threshold_low):
 # Function to process the uploaded file
 def process_file(file, threshold_high, threshold_low):
     try:
-        # Try different encodings
+        # Try different encoding and delimiter combinations
         encodings = ['utf-8', 'latin-1', 'ISO-8859-1', 'cp1252']
+        delimiters = [',', '\t', ';']
+        success = False
         
         for encoding in encodings:
-            try:
-                # Read the uploaded file with specific encoding
-                df = pd.read_csv(file, encoding=encoding)
-                st.success(f"File successfully read using {encoding} encoding.")
-                break  # Exit loop if successful
-            except UnicodeDecodeError:
-                # If we've tried all encodings and none worked
-                if encoding == encodings[-1]:
-                    error_msg = f"Failed to read file with any common encoding. Please save your CSV file as UTF-8."
+            if success:
+                break
+                
+            for delimiter in delimiters:
+                try:
+                    # Read the uploaded file with specific encoding and delimiter
+                    df = pd.read_csv(file, encoding=encoding, sep=delimiter)
+                    
+                    # Clean column names - strip whitespace and handle special characters
+                    df.columns = [col.strip() for col in df.columns]
+                    
+                    st.success(f"File successfully read using {encoding} encoding with '{delimiter}' delimiter.")
+                    log_error("File reading", f"Successfully read file with {encoding} encoding and '{delimiter}' delimiter")
+                    success = True
+                    break
+                    
+                except UnicodeDecodeError:
+                    continue
+                except pd.errors.EmptyDataError:
+                    error_msg = "The file appears to be empty."
                     st.error(error_msg)
-                    log_error("Encoding error", error_msg)
+                    log_error("Empty file", error_msg)
                     return None
-                continue  # Try next encoding
-            except Exception as e:
-                error_msg = f"Error reading file: {e}"
-                st.error(error_msg)
-                log_error("File reading error", str(e))
-                return None
+                except pd.errors.ParserError:
+                    # Try the next delimiter
+                    continue
+                except Exception as e:
+                    # Log the error and try next combination
+                    log_error("File reading error", f"Error with {encoding}/{delimiter}: {str(e)}")
+                    continue
+        
+        if not success:
+            error_msg = "Failed to read file with any common encoding or delimiter. Please check the file format."
+            st.error(error_msg)
+            log_error("File reading error", error_msg)
+            return None
+            
+        # Reset file pointer for potential reuse
+        file.seek(0)
         
         # Display column information for debugging
         st.info(f"Columns found in your data: {', '.join(df.columns.tolist())}")
         
-        # Check for required columns (case-insensitive)
+        # Check for required columns (case-insensitive and trim whitespace)
+        df_columns_lower = [col.lower().strip() for col in df.columns]
         required_fields = ['title', 'abstract']
-        df_columns_lower = [col.lower() for col in df.columns]
         
-        missing_fields = [field for field in required_fields if field not in df_columns_lower]
+        # Try to find columns that might be the title/abstract with variations
+        title_variants = ['title', 'article title', 'publication title']
+        abstract_variants = ['abstract', 'summary', 'abstract note']
+        
+        # Look for title column
+        title_col = None
+        for variant in title_variants:
+            matches = [col for col in df.columns if variant.lower() in col.lower()]
+            if matches:
+                title_col = matches[0]
+                break
+                
+        # Look for abstract column
+        abstract_col = None
+        for variant in abstract_variants:
+            matches = [col for col in df.columns if variant.lower() in col.lower()]
+            if matches:
+                abstract_col = matches[0]
+                break
+        
+        # If we found variant column names, rename them to standard format
+        if title_col and title_col != 'Title':
+            df = df.rename(columns={title_col: 'Title'})
+            st.info(f"Renamed column '{title_col}' to 'Title'")
+            
+        if abstract_col and abstract_col != 'Abstract':
+            df = df.rename(columns={abstract_col: 'Abstract'})
+            st.info(f"Renamed column '{abstract_col}' to 'Abstract'")
+        
+        # Verify we have the required columns after all attempts to find and rename
+        missing_fields = []
+        if 'title' not in [col.lower() for col in df.columns]:
+            missing_fields.append('Title')
+        if 'abstract' not in [col.lower() for col in df.columns]:
+            missing_fields.append('Abstract')
+            
         if missing_fields:
             error_msg = f"Required columns missing: {', '.join(missing_fields)}. Your CSV file must have columns named 'Title' and 'Abstract'."
             st.error(error_msg)
@@ -231,7 +289,7 @@ def process_file(file, threshold_high, threshold_low):
         for std_col in ['Title', 'Abstract', 'Authors', 'Year', 'Journal']:
             std_col_lower = std_col.lower()
             for col in df.columns:
-                if col.lower() == std_col_lower:
+                if col.lower() == std_col_lower and col != std_col:
                     column_mapping[col] = std_col
                     break
         
@@ -260,16 +318,17 @@ def process_file(file, threshold_high, threshold_low):
             st.dataframe(df.head(3))
         
         # Calculate score and classify each record
-        for idx, row in df.iterrows():
-            score, matches, category_counts = calculate_score(row, all_keywords)
-            classification = classify_record(score, threshold_high, threshold_low)
-            
-            df.at[idx, 'Score'] = round(score, 1)
-            df.at[idx, 'AMR_Count'] = category_counts["amr"]
-            df.at[idx, 'Diagnostic_Count'] = category_counts["diagnostic"]
-            df.at[idx, 'Sepsis_Count'] = category_counts["sepsis"]
-            df.at[idx, 'Matches'] = ", ".join(matches.keys())
-            df.at[idx, 'Classification'] = classification
+        with st.spinner("Processing records... This may take a while for large files."):
+            for idx, row in df.iterrows():
+                score, matches, category_counts = calculate_score(row, all_keywords)
+                classification = classify_record(score, threshold_high, threshold_low)
+                
+                df.at[idx, 'Score'] = round(score, 1)
+                df.at[idx, 'AMR_Count'] = category_counts["amr"]
+                df.at[idx, 'Diagnostic_Count'] = category_counts["diagnostic"]
+                df.at[idx, 'Sepsis_Count'] = category_counts["sepsis"]
+                df.at[idx, 'Matches'] = ", ".join(matches.keys())
+                df.at[idx, 'Classification'] = classification
         
         # Check if any matches were found
         if df['Score'].sum() == 0:
@@ -366,43 +425,90 @@ def check_csv_format():
         return
     
     try:
-        st.info("Testing different encodings and checking file structure...")
+        st.info("Testing different encodings and delimiters...")
         encodings = ['utf-8', 'latin-1', 'ISO-8859-1', 'cp1252']
+        delimiters = [',', '\t', ';']
         
-        # Try to read with different encodings
+        # Try to read with different encodings and delimiters
         success = False
+        best_encoding = None
+        best_delimiter = None
+        
         for encoding in encodings:
-            try:
-                with st.spinner(f"Trying {encoding} encoding..."):
-                    df = pd.read_csv(uploaded_file, encoding=encoding)
-                    st.success(f"✅ Successfully read file with {encoding} encoding!")
-                    log_error("File check", f"Successfully read file '{uploaded_file.name}' using {encoding} encoding")
-                    success = True
-                    break
-            except UnicodeDecodeError:
-                continue
-            except Exception as e:
-                log_error("CSV check error", f"Error with {encoding} encoding: {str(e)}")
-                continue
+            if success:
+                break
+                
+            for delimiter in delimiters:
+                try:
+                    with st.spinner(f"Trying {encoding} encoding with '{delimiter}' delimiter..."):
+                        # Reset file pointer before each attempt
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter)
+                        
+                        # Clean column names
+                        df.columns = [col.strip() for col in df.columns]
+                        
+                        st.success(f"✅ Successfully read file with {encoding} encoding and '{delimiter}' delimiter!")
+                        log_error("File check", f"Successfully read file '{uploaded_file.name}' using {encoding} encoding and '{delimiter}' delimiter")
+                        success = True
+                        best_encoding = encoding
+                        best_delimiter = delimiter
+                        break
+                except UnicodeDecodeError:
+                    continue
+                except pd.errors.EmptyDataError:
+                    st.error("❌ The file appears to be empty.")
+                    log_error("Empty file", f"File '{uploaded_file.name}' appears to be empty")
+                    return
+                except pd.errors.ParserError:
+                    # Try next delimiter
+                    continue
+                except Exception as e:
+                    log_error("CSV check error", f"Error with {encoding}/{delimiter}: {str(e)}")
+                    continue
                 
         if not success:
-            st.error("❌ Could not read the file with any common encoding. Please convert your file to UTF-8 encoding.")
-            log_error("CSV encoding error", f"Failed to open file '{uploaded_file.name}' with any encoding")
+            st.error("❌ Could not read the file with any common encoding or delimiter. Please check your file format.")
+            log_error("CSV encoding/delimiter error", f"Failed to open file '{uploaded_file.name}' with any combination")
             return
+        
+        # Reset for subsequent operations
+        uploaded_file.seek(0)
             
-        # Check required columns
+        # Check columns
         column_info = f"Found columns: {', '.join(df.columns.tolist())}"
         st.info(column_info)
         
-        # Check for required columns (case-insensitive)
-        df_columns_lower = [col.lower() for col in df.columns]
-        if 'title' in df_columns_lower and 'abstract' in df_columns_lower:
-            st.success("✅ Required columns 'Title' and 'Abstract' found!")
+        # Try to find columns that might be the title/abstract with variations
+        title_variants = ['title', 'article title', 'publication title']
+        abstract_variants = ['abstract', 'summary', 'abstract note']
+        
+        # Look for title column
+        title_col = None
+        for variant in title_variants:
+            matches = [col for col in df.columns if variant.lower() in col.lower()]
+            if matches:
+                title_col = matches[0]
+                st.success(f"✅ Found title column: '{title_col}'")
+                break
+                
+        # Look for abstract column
+        abstract_col = None
+        for variant in abstract_variants:
+            matches = [col for col in df.columns if variant.lower() in col.lower()]
+            if matches:
+                abstract_col = matches[0]
+                st.success(f"✅ Found abstract column: '{abstract_col}'")
+                break
+        
+        # Check if we found the required columns
+        if title_col and abstract_col:
+            st.success("✅ Required columns for title and abstract found!")
         else:
             missing = []
-            if 'title' not in df_columns_lower:
+            if not title_col:
                 missing.append('Title')
-            if 'abstract' not in df_columns_lower:
+            if not abstract_col:
                 missing.append('Abstract')
             error_msg = f"❌ Missing required columns: {', '.join(missing)}"
             st.error(error_msg)
@@ -415,21 +521,22 @@ def check_csv_format():
         empty_titles = 0
         empty_abstracts = 0
         
-        for col in df.columns:
-            if col.lower() == 'title':
-                empty_titles = df[col].isna().sum() + len(df[df[col].astype(str).str.strip() == ''])
-                text_fields.append(col)
-            elif col.lower() == 'abstract':
-                empty_abstracts = df[col].isna().sum() + len(df[df[col].astype(str).str.strip() == ''])
-                text_fields.append(col)
+        # Check the identified columns
+        if title_col:
+            empty_titles = df[title_col].isna().sum() + len(df[df[title_col].astype(str).str.strip() == ''])
+            text_fields.append(title_col)
+            
+        if abstract_col:
+            empty_abstracts = df[abstract_col].isna().sum() + len(df[df[abstract_col].astype(str).str.strip() == ''])
+            text_fields.append(abstract_col)
         
         if empty_titles > 0:
-            warning_msg = f"⚠️ Found {empty_titles} empty or missing values in the Title column ({round(empty_titles/total_rows*100, 1)}% of data)"
+            warning_msg = f"⚠️ Found {empty_titles} empty or missing values in the title column ({round(empty_titles/total_rows*100, 1)}% of data)"
             st.warning(warning_msg)
             log_error("Empty data", warning_msg)
         
         if empty_abstracts > 0:
-            warning_msg = f"⚠️ Found {empty_abstracts} empty or missing values in the Abstract column ({round(empty_abstracts/total_rows*100, 1)}% of data)"
+            warning_msg = f"⚠️ Found {empty_abstracts} empty or missing values in the abstract column ({round(empty_abstracts/total_rows*100, 1)}% of data)"
             st.warning(warning_msg)
             log_error("Empty data", warning_msg)
             
@@ -440,6 +547,9 @@ def check_csv_format():
         # Show success if all checks passed
         if empty_titles == 0 and empty_abstracts == 0:
             st.success("✅ CSV format looks good! All checks passed.")
+            
+        # Provide recommendations for using this file
+        st.info(f"💡 Recommendation: Use this file with encoding='{best_encoding}' and delimiter='{best_delimiter}'")
         
     except Exception as e:
         import traceback

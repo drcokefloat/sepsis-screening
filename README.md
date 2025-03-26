@@ -33,7 +33,7 @@ A Streamlit application for automatically screening research records for diagnos
 
 2. Open your web browser and navigate to the URL shown in the terminal (typically http://localhost:8501)
 
-3. Upload your CSV file containing research records (you can use the provided `sample_data.csv` for testing)
+3. Upload your CSV file containing research records (you can use the provided `clean_sample_data.csv` for testing)
 
 4. Adjust the threshold settings in the sidebar as needed
 
@@ -41,9 +41,19 @@ A Streamlit application for automatically screening research records for diagnos
 
 6. Download the results using the provided link
 
+## CSV Encoding Note
+
+If you encounter encoding errors when uploading CSV files, try the following:
+
+1. Use the provided `clean_sample_data.csv` which is guaranteed to be UTF-8 encoded
+2. For your own data files:
+   - Open your CSV in a text editor like Notepad++ or VS Code
+   - Save the file with UTF-8 encoding
+   - Alternatively, the app now attempts to handle multiple encodings automatically
+
 ## Sample Data
 
-A sample dataset (`sample_data.csv`) is included in this repository for testing purposes. It contains 12 mock research records related to sepsis, antimicrobial resistance, and diagnostic methods. Each record includes title, abstract, authors, publication year, and journal information.
+A sample dataset (`clean_sample_data.csv`) is included in this repository for testing purposes. It contains 12 mock research records related to sepsis, antimicrobial resistance, and diagnostic methods. Each record includes title, abstract, authors, publication year, and journal information.
 
 ## Input Data Format
 
@@ -62,15 +72,14 @@ The screening is based on three categories of keywords:
 
 You can view the specific keywords in each category by expanding the respective sections in the sidebar.
 
-## Scoring System
+## Weighted Scoring System
 
-Each record receives a score based on the number of keyword matches found in both the title and abstract. Records are then classified as:
+Each keyword category has a different weight in the scoring system:
+- AMR Keywords: 1.2 (20% higher weight)
+- Sepsis Keywords: 1.1 (10% higher weight)
+- Diagnostic Keywords: 1.0 (standard weight)
 
-- **Include**: Records with scores at or above the high threshold
-- **Exclude**: Records with scores below the low threshold
-- **Maybe**: Records with scores between the two thresholds
-
-The thresholds can be adjusted in the sidebar to fine-tune the screening process.
+This weighting prioritizes records focusing on antimicrobial resistance in sepsis.
 
 ## License
 

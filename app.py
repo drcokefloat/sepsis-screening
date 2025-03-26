@@ -116,8 +116,24 @@ def classify_record(score, threshold_high, threshold_low):
 # Function to process the uploaded file
 def process_file(file, threshold_high, threshold_low):
     try:
-        # Read the uploaded file
-        df = pd.read_csv(file)
+        # Try different encodings
+        encodings = ['utf-8', 'latin-1', 'ISO-8859-1', 'cp1252']
+        
+        for encoding in encodings:
+            try:
+                # Read the uploaded file with specific encoding
+                df = pd.read_csv(file, encoding=encoding)
+                st.success(f"File successfully read using {encoding} encoding.")
+                break  # Exit loop if successful
+            except UnicodeDecodeError:
+                # If we've tried all encodings and none worked
+                if encoding == encodings[-1]:
+                    st.error(f"Failed to read file with any common encoding. Please save your CSV file as UTF-8.")
+                    return None
+                continue  # Try next encoding
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+                return None
         
         # Initialize columns for score and classification
         df['Score'] = 0

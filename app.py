@@ -78,8 +78,12 @@ sepsis_keywords = [
     "pyemia", "toxic shock", "sequential organ failure"
 ]
 
-# Combine all keywords
-all_keywords = amr_keywords + diagnostic_keywords + sepsis_keywords
+# Define default keyword dictionary structure
+default_keywords = {
+    "amr": amr_keywords,
+    "diagnostic": diagnostic_keywords,
+    "sepsis": sepsis_keywords
+}
 
 # Keyword category weights
 keyword_weights = {
@@ -243,6 +247,13 @@ def process_file(file, threshold_high, threshold_low):
         df['Sepsis_Count'] = 0
         df['Matches'] = ""
         df['Classification'] = ""
+        
+        # Create dictionaries to store all keywords (default + custom)
+        all_keywords = {
+            "amr": amr_keywords + st.session_state.custom_keywords["amr"],
+            "diagnostic": diagnostic_keywords + st.session_state.custom_keywords["diagnostic"], 
+            "sepsis": sepsis_keywords + st.session_state.custom_keywords["sepsis"]
+        }
         
         # Display preview of data for debugging
         with st.expander("Preview of data (first 3 rows)"):
@@ -508,13 +519,6 @@ with tab1:
             if st.session_state.custom_keywords["sepsis"]:
                 st.markdown("**Custom keywords:**")
                 st.write(", ".join(st.session_state.custom_keywords["sepsis"]))
-        
-        # Create dictionaries to store all keywords (default + custom)
-        all_keywords = {
-            "amr": amr_keywords + st.session_state.custom_keywords["amr"],
-            "diagnostic": diagnostic_keywords + st.session_state.custom_keywords["diagnostic"], 
-            "sepsis": sepsis_keywords + st.session_state.custom_keywords["sepsis"]
-        }
         
         # Process the file when uploaded
         if uploaded_file is not None:

@@ -194,14 +194,38 @@ def process_file(file, threshold_high, threshold_low):
         delimiters = [',', '\t', ';']
         success = False
         
+        # Special case for EndNote exports
+        is_endnote_export = False
+        
         for encoding in encodings:
             if success:
                 break
                 
             for delimiter in delimiters:
                 try:
-                    # Read the uploaded file with specific encoding and delimiter
-                    df = pd.read_csv(file, encoding=encoding, sep=delimiter)
+                    # For EndNote exports, we need to handle potential quoting issues
+                    # First try standard reading
+                    uploaded_file = file  # Create a local reference to avoid modifying the parameter
+                    uploaded_file.seek(0)  # Reset file pointer
+                    
+                    # Try to detect if this is an EndNote export
+                    peek = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter, nrows=1)
+                    if any('Abstract' in col for col in peek.columns):
+                        is_endnote_export = True
+                        st.info("Detected EndNote export format.")
+                    
+                    # Reset file pointer again
+                    uploaded_file.seek(0)
+                    
+                    # For EndNote exports, we need to use more flexible quoting parameters
+                    if is_endnote_export:
+                        df = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter, 
+                                          quoting=3,  # QUOTE_NONE
+                                          escapechar='\\',
+                                          error_bad_lines=False,  # Skip bad lines
+                                          warn_bad_lines=True)  # Warn about them
+                    else:
+                        df = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter)
                     
                     # Clean column names - strip whitespace and handle special characters
                     df.columns = [col.strip() for col in df.columns]
@@ -238,84 +262,105 @@ def process_file(file, threshold_high, threshold_low):
         # Display column information for debugging
         st.info(f"Columns found in your data: {', '.join(df.columns.tolist())}")
         
-        # Check for required columns (case-insensitive and trim whitespace)
-        df_columns_lower = [col.lower().strip() for col in df.columns]
-        required_fields = ['title', 'abstract']
-        
-        # Try to find columns that might be the title/abstract with variations
-        title_variants = ['title', 'article title', 'publication title', 'primary title']
-        # EndNote often exports abstracts in columns like "Abstract Note" or just has author information in a column
-        abstract_variants = ['abstract', 'summary', 'abstract note', 'notes', 'research notes']
-        
-        # Initialize these variables
-        title_col = None
-        abstract_col = None
-        
-        # Look for title column
-        for variant in title_variants:
-            matches = [col for col in df.columns if variant.lower() in col.lower()]
-            if matches:
-                title_col = matches[0]
-                st.success(f"✅ Found title column: '{title_col}'")
-                break
-                
-        # Look for abstract column
-        for variant in abstract_variants:
-            matches = [col for col in df.columns if variant.lower() in col.lower()]
-            if matches:
-                abstract_col = matches[0]
-                st.success(f"✅ Found abstract column: '{abstract_col}'")
-                break
-        
-        # Special handling for EndNote exports which might not have dedicated abstract column
-        if not abstract_col:
-            long_text_fields = []
-            for col in df.columns:
-                if col not in ['Title'] and isinstance(df[col].iloc[0] if len(df) > 0 else "", str):
-                    # Sample the first few non-empty values
-                    sample_vals = [str(val) for val in df[col].dropna().head(5).values if isinstance(val, str)]
-                    if sample_vals and any(len(val) > 100 for val in sample_vals):  # Likely abstract if text is long
-                        long_text_fields.append(col)
-                    
-            if long_text_fields:
-                # If we have long text fields but no abstract column, use the longest one as abstract
-                if len(long_text_fields) == 1:
-                    abstract_col = long_text_fields[0]
-                    st.success(f"✅ Using '{abstract_col}' as Abstract field based on text length")
-                else:
-                    # Find the field with the longest average text
-                    avg_lengths = []
-                    for field in long_text_fields:
-                        avg_len = df[field].astype(str).apply(len).mean()
-                        avg_lengths.append((field, avg_len))
-                    
-                    # Sort by average length and take the longest
-                    avg_lengths.sort(key=lambda x: x[1], reverse=True)
-                    abstract_col = avg_lengths[0][0]
-                    st.success(f"✅ Using '{abstract_col}' as Abstract field (average length: {int(avg_lengths[0][1])} chars)")
-        
-        # If we found variant column names, rename them to standard format
-        if title_col and title_col != 'Title':
-            df = df.rename(columns={title_col: 'Title'})
-            st.info(f"Renamed column '{title_col}' to 'Title'")
+        # For EndNote exports, we can look specifically at column positions
+        if is_endnote_export:
+            st.info("Processing as EndNote export - will look for columns in standard EndNote positions")
+            # In EndNote exports, Title is typically column 4, Abstract is around column 28
+            if len(df.columns) >= 4:
+                title_col_index = 3  # Zero-based indexing
+                title_col = df.columns[title_col_index]
+                st.info(f"Using '{title_col}' as Title column (standard EndNote position)")
             
-        if abstract_col and abstract_col != 'Abstract':
-            df = df.rename(columns={abstract_col: 'Abstract'})
-            st.info(f"Renamed column '{abstract_col}' to 'Abstract'")
+            # Look for Abstract column - usually column 28 in EndNote exports
+            if len(df.columns) >= 28:
+                abstract_col_index = 27  # Zero-based indexing
+                abstract_col = df.columns[abstract_col_index]
+                st.info(f"Using '{abstract_col}' as Abstract column (standard EndNote position)")
+            
+            # If we have our columns, rename them
+            if 'title_col' in locals() and title_col != 'Title':
+                df = df.rename(columns={title_col: 'Title'})
+            
+            if 'abstract_col' in locals() and abstract_col != 'Abstract':
+                df = df.rename(columns={abstract_col: 'Abstract'})
+        else:
+            # Standard handling for non-EndNote files
+            # Check for required columns (case-insensitive and trim whitespace)
+            df_columns_lower = [col.lower().strip() for col in df.columns]
+            required_fields = ['title', 'abstract']
+            
+            # Try to find columns that might be the title/abstract with variations
+            title_variants = ['title', 'article title', 'publication title', 'primary title']
+            # EndNote often exports abstracts in columns like "Abstract Note" or just has author information in a column
+            abstract_variants = ['abstract', 'summary', 'abstract note', 'notes', 'research notes']
+            
+            # Initialize these variables
+            title_col = None
+            abstract_col = None
+            
+            # Look for title column
+            for variant in title_variants:
+                matches = [col for col in df.columns if variant.lower() in col.lower()]
+                if matches:
+                    title_col = matches[0]
+                    break
+            
+            # Look for abstract column
+            for variant in abstract_variants:
+                matches = [col for col in df.columns if variant.lower() in col.lower()]
+                if matches:
+                    abstract_col = matches[0]
+                    break
+            
+            # Special handling for files which might not have dedicated abstract column
+            if not abstract_col:
+                long_text_fields = []
+                for col in df.columns:
+                    if col not in ['Title'] and isinstance(df[col].iloc[0] if len(df) > 0 else "", str):
+                        # Sample the first few non-empty values
+                        sample_vals = [str(val) for val in df[col].dropna().head(5).values if isinstance(val, str)]
+                        if sample_vals and any(len(val) > 100 for val in sample_vals):  # Likely abstract if text is long
+                            long_text_fields.append(col)
+                
+                if long_text_fields:
+                    # If we have long text fields but no abstract column, use the longest one as abstract
+                    if len(long_text_fields) == 1:
+                        abstract_col = long_text_fields[0]
+                        st.info(f"Using '{abstract_col}' as Abstract field based on text length")
+                    else:
+                        # Find the field with the longest average text
+                        avg_lengths = []
+                        for field in long_text_fields:
+                            avg_len = df[field].astype(str).apply(len).mean()
+                            avg_lengths.append((field, avg_len))
+                        
+                        # Sort by average length and take the longest
+                        avg_lengths.sort(key=lambda x: x[1], reverse=True)
+                        abstract_col = avg_lengths[0][0]
+                        st.info(f"Using '{abstract_col}' as Abstract field (average length: {int(avg_lengths[0][1])} chars)")
+            
+            # If we found variant column names, rename them to standard format
+            if title_col and title_col != 'Title':
+                df = df.rename(columns={title_col: 'Title'})
+                st.info(f"Renamed column '{title_col}' to 'Title'")
+            
+            if abstract_col and abstract_col != 'Abstract':
+                df = df.rename(columns={abstract_col: 'Abstract'})
+                st.info(f"Renamed column '{abstract_col}' to 'Abstract'")
         
         # Verify we have the required columns after all attempts to find and rename
         missing_fields = []
-        if 'title' not in [col.lower() for col in df.columns]:
+        if 'Title' not in df.columns and 'title' not in [col.lower() for col in df.columns]:
             missing_fields.append('Title')
-        if 'abstract' not in [col.lower() for col in df.columns]:
+        if 'Abstract' not in df.columns and 'abstract' not in [col.lower() for col in df.columns]:
             missing_fields.append('Abstract')
-            
+        
         if missing_fields:
             error_msg = f"Required columns missing: {', '.join(missing_fields)}. Your CSV file must have columns named 'Title' and 'Abstract'."
             st.error(error_msg)
             log_error("Missing required columns", f"Missing: {', '.join(missing_fields)}, Available: {', '.join(df.columns)}")
             return None
-            
+        
         # Map column names to standard format (case-insensitive)
         column_mapping = {}
         for std_col in ['Title', 'Abstract', 'Authors', 'Year', 'Journal']:
@@ -465,6 +510,7 @@ def check_csv_format():
         success = False
         best_encoding = None
         best_delimiter = None
+        is_endnote_export = False
         
         for encoding in encodings:
             if success:
@@ -475,7 +521,25 @@ def check_csv_format():
                     with st.spinner(f"Trying {encoding} encoding with '{delimiter}' delimiter..."):
                         # Reset file pointer before each attempt
                         uploaded_file.seek(0)
-                        df = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter)
+                        
+                        # Try to detect if this is an EndNote export
+                        peek = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter, nrows=1)
+                        if any('Abstract' in col for col in peek.columns):
+                            is_endnote_export = True
+                            st.info("Detected EndNote export format.")
+                        
+                        # Reset file pointer again
+                        uploaded_file.seek(0)
+                        
+                        # For EndNote exports, we need to use more flexible quoting parameters
+                        if is_endnote_export:
+                            df = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter, 
+                                             quoting=3,  # QUOTE_NONE
+                                             escapechar='\\',
+                                             error_bad_lines=False,  # Skip bad lines
+                                             warn_bad_lines=True)  # Warn about them
+                        else:
+                            df = pd.read_csv(uploaded_file, encoding=encoding, sep=delimiter)
                         
                         # Clean column names
                         df.columns = [col.strip() for col in df.columns]
@@ -511,32 +575,46 @@ def check_csv_format():
         column_info = f"Found columns: {', '.join(df.columns.tolist())}"
         st.info(column_info)
         
-        # Try to find columns that might be the title/abstract with variations
-        title_variants = ['title', 'article title', 'publication title', 'primary title']
-        # EndNote often exports abstracts in columns like "Abstract Note" or just has author information in a column
-        abstract_variants = ['abstract', 'summary', 'abstract note', 'notes', 'research notes']
-        
         # Initialize these variables
         title_col = None
         abstract_col = None
         
-        # Look for title column
-        for variant in title_variants:
-            matches = [col for col in df.columns if variant.lower() in col.lower()]
-            if matches:
-                title_col = matches[0]
-                st.success(f"✅ Found title column: '{title_col}'")
-                break
-                
-        # Look for abstract column
-        for variant in abstract_variants:
-            matches = [col for col in df.columns if variant.lower() in col.lower()]
-            if matches:
-                abstract_col = matches[0]
-                st.success(f"✅ Found abstract column: '{abstract_col}'")
-                break
+        # For EndNote exports, we can look specifically at column positions
+        if is_endnote_export:
+            st.info("Processing as EndNote export - looking for columns in standard EndNote positions")
+            # In EndNote exports, Title is typically column 4, Abstract is around column 28
+            if len(df.columns) >= 4:
+                title_col_index = 3  # Zero-based indexing
+                title_col = df.columns[title_col_index]
+                st.success(f"✅ Found title column: '{title_col}' (standard EndNote position)")
+            
+            # Look for Abstract column - usually column 28 in EndNote exports
+            if len(df.columns) >= 28:
+                abstract_col_index = 27  # Zero-based indexing
+                abstract_col = df.columns[abstract_col_index]
+                st.success(f"✅ Found abstract column: '{abstract_col}' (standard EndNote position)")
+        else:
+            # Try to find columns that might be the title/abstract with variations
+            title_variants = ['title', 'article title', 'publication title', 'primary title']
+            abstract_variants = ['abstract', 'summary', 'abstract note', 'notes', 'research notes']
+            
+            # Look for title column
+            for variant in title_variants:
+                matches = [col for col in df.columns if variant.lower() in col.lower()]
+                if matches:
+                    title_col = matches[0]
+                    st.success(f"✅ Found title column: '{title_col}'")
+                    break
+                    
+            # Look for abstract column
+            for variant in abstract_variants:
+                matches = [col for col in df.columns if variant.lower() in col.lower()]
+                if matches:
+                    abstract_col = matches[0]
+                    st.success(f"✅ Found abstract column: '{abstract_col}'")
+                    break
         
-        # Special handling for EndNote exports which might not have dedicated abstract column
+        # Special handling for files which might not have dedicated abstract column
         if not abstract_col:
             long_text_fields = []
             for col in df.columns:
@@ -545,7 +623,7 @@ def check_csv_format():
                     sample_vals = [str(val) for val in df[col].dropna().head(5).values if isinstance(val, str)]
                     if sample_vals and any(len(val) > 100 for val in sample_vals):  # Likely abstract if text is long
                         long_text_fields.append(col)
-                    
+                        
             if long_text_fields:
                 # If we have long text fields but no abstract column, use the longest one as abstract
                 if len(long_text_fields) == 1:
@@ -563,45 +641,45 @@ def check_csv_format():
                     abstract_col = avg_lengths[0][0]
                     st.success(f"✅ Using '{abstract_col}' as Abstract field (average length: {int(avg_lengths[0][1])} chars)")
         
-        # Check for text data
-        text_fields = []
-        total_rows = len(df)
-        empty_titles = 0
-        empty_abstracts = 0
-        
-        # Check the identified columns
-        if title_col:
-            empty_titles = df[title_col].isna().sum() + len(df[df[title_col].astype(str).str.strip() == ''])
-            text_fields.append(title_col)
-            
-        if abstract_col:
-            empty_abstracts = df[abstract_col].isna().sum() + len(df[df[abstract_col].astype(str).str.strip() == ''])
-            text_fields.append(abstract_col)
-        
-        if empty_titles > 0:
-            warning_msg = f"⚠️ Found {empty_titles} empty or missing values in the title column ({round(empty_titles/total_rows*100, 1)}% of data)"
-            st.warning(warning_msg)
-            log_error("Empty data", warning_msg)
-        
-        if empty_abstracts > 0:
-            warning_msg = f"⚠️ Found {empty_abstracts} empty or missing values in the abstract column ({round(empty_abstracts/total_rows*100, 1)}% of data)"
-            st.warning(warning_msg)
-            log_error("Empty data", warning_msg)
-            
-        # Preview the data (avoid using expander inside the troubleshooting expander)
-        st.subheader("Data Preview (First 5 Rows)")
-        st.dataframe(df.head(5))
-            
-        # Show success if all checks passed
-        if empty_titles == 0 and empty_abstracts == 0:
-            st.success("✅ CSV format looks good! All checks passed.")
-            
-        # Provide recommendations for using this file
-        st.info(f"💡 Recommendation: Use this file with encoding='{best_encoding}' and delimiter='{best_delimiter}'")
-        
         # Check if we found the required columns
         if title_col and abstract_col:
             st.success("✅ Required columns for title and abstract found!")
+            
+            # Check for text data
+            text_fields = []
+            total_rows = len(df)
+            empty_titles = 0
+            empty_abstracts = 0
+            
+            # Check the identified columns
+            if title_col:
+                empty_titles = df[title_col].isna().sum() + len(df[df[title_col].astype(str).str.strip() == ''])
+                text_fields.append(title_col)
+                
+            if abstract_col:
+                empty_abstracts = df[abstract_col].isna().sum() + len(df[df[abstract_col].astype(str).str.strip() == ''])
+                text_fields.append(abstract_col)
+            
+            if empty_titles > 0:
+                warning_msg = f"⚠️ Found {empty_titles} empty or missing values in the title column ({round(empty_titles/total_rows*100, 1)}% of data)"
+                st.warning(warning_msg)
+                log_error("Empty data", warning_msg)
+            
+            if empty_abstracts > 0:
+                warning_msg = f"⚠️ Found {empty_abstracts} empty or missing values in the abstract column ({round(empty_abstracts/total_rows*100, 1)}% of data)"
+                st.warning(warning_msg)
+                log_error("Empty data", warning_msg)
+            
+            # Preview the data (avoid using expander inside the troubleshooting expander)
+            st.subheader("Data Preview (First 5 Rows)")
+            st.dataframe(df.head(5))
+            
+            # Show success if all checks passed
+            if empty_titles == 0 and empty_abstracts == 0:
+                st.success("✅ CSV format looks good! All checks passed.")
+            
+            # Provide recommendations for using this file
+            st.info(f"💡 Recommendation: Use this file with encoding='{best_encoding}' and delimiter='{best_delimiter}'")
         else:
             missing = []
             if not title_col:
